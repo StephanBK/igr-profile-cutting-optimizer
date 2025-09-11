@@ -126,8 +126,10 @@ def parse_excel(file):
                     'length_in': float(row[7]),
                     'cutting_angle': float(row[8]) if len(row) > 8 and pd.notna(row[8]) else 90.0,
                     'description': str(row[3]) if pd.notna(row[3]) else '',
-                    'unit_type': str(row[9]).strip() if len(row) > 9 and pd.notna(row[9]) else '',  # FIXED: Unit type is column 9
-                    'position': str(row[4]).strip() if len(row) > 4 and pd.notna(row[4]) else '',  # FIXED: Position is column 4
+                    'unit_type': str(row[9]).strip() if len(row) > 9 and pd.notna(row[9]) else '',
+                    # FIXED: Unit type is column 9
+                    'position': str(row[4]).strip() if len(row) > 4 and pd.notna(row[4]) else '',
+                    # FIXED: Position is column 4
                 })
             except:
                 continue
@@ -502,7 +504,7 @@ def create_labels_pdf(all_results, project_info):
     return buffer, label_count
 
 
-def create_excel_report(all_results, project_info):
+def create_excel_report(all_results, project_info, available_materials):
     """Create Excel report with cutting patterns in table format"""
     buffer = io.BytesIO()
 
@@ -528,12 +530,34 @@ def create_excel_report(all_results, project_info):
             'bg_color': '#FFCCCC'
         })
 
+        shortage_format = workbook.add_format({
+            'bold': True,
+            'bg_color': '#FF6B6B',
+            'font_color': 'white',
+            'border': 1,
+            'align': 'center'
+        })
+
         # Create summary data
         summary_data = []
 
         for profile_num, result in all_results.items():
             bins = result['bins']
+            selected_materials = result['selected_materials']
             stock_num = 1
+
+            # Calculate shortage for this profile
+            total_available = 0
+            shortage = 0
+            if 0 not in selected_materials:  # Not "Other" option
+                for idx in selected_materials:
+                    if idx > 0 and profile_num in available_materials:
+                        materials_list = available_materials[profile_num]
+                        if idx - 1 < len(materials_list):
+                            total_available += materials_list[idx - 1]['quantity']
+
+                if len(bins) > total_available:
+                    shortage = len(bins) - total_available
 
             for bin_data in bins:
                 stock_length_ft = bin_data['stock_length'] / 12
@@ -549,7 +573,8 @@ def create_excel_report(all_results, project_info):
                         'Piece Length (in)': f"{piece['length']:.3f}",
                         'Cut Angle': f"{piece['angle']:.0f}°",
                         'Cut Loss (in)': f"{piece['cut_loss']:.3f}",
-                        'Type': 'PIECE'
+                        'Type': 'PIECE',
+                        'Shortage': f"{shortage} additional needed" if shortage > 0 and stock_num == 1 else ''
                     })
 
                 # Add waste entry
@@ -566,7 +591,8 @@ def create_excel_report(all_results, project_info):
                         'Piece Length (in)': f"{waste:.3f}",
                         'Cut Angle': '',
                         'Cut Loss (in)': '',
-                        'Type': 'WASTE'
+                        'Type': 'WASTE',
+                        'Shortage': ''
                     })
 
                 stock_num += 1
@@ -587,6 +613,8 @@ def create_excel_report(all_results, project_info):
             for col in range(len(df.columns)):
                 if df.iloc[row - 1]['Type'] == 'WASTE':
                     worksheet.write(row, col, df.iloc[row - 1, col], waste_format)
+                elif df.iloc[row - 1]['Shortage'] and 'additional needed' in str(df.iloc[row - 1]['Shortage']):
+                    worksheet.write(row, col, df.iloc[row - 1, col], shortage_format)
                 else:
                     worksheet.write(row, col, df.iloc[row - 1, col], cell_format)
 
@@ -598,7 +626,7 @@ def create_excel_report(all_results, project_info):
     return buffer
 
 
-def create_cutting_patterns_pdf(all_results, project_info):
+def create_cutting_patterns_pdf(all_results, project_info, available_materials):
     """Create PDF showing cutting patterns for all profiles"""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5 * inch, bottomMargin=0.5 * inch)
@@ -609,7 +637,8 @@ def create_cutting_patterns_pdf(all_results, project_info):
     title_style = styles['Title']
     title_style.alignment = TA_CENTER
     project_name = project_info.get('Project Name', '')
-    story.append(Paragraph(f"IGR Cutting Patterns - {project_name}" if project_name else "IGR Cutting Patterns", title_style))
+    story.append(
+        Paragraph(f"IGR Cutting Patterns - {project_name}" if project_name else "IGR Cutting Patterns", title_style))
     story.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
     story.append(Paragraph(f"Cut Loss: 90°={CUT_LOSS_90:.3f}\", 45°={CUT_LOSS_45:.1f}\"", styles['Normal']))
     story.append(Spacer(1, 12))
@@ -617,11 +646,32 @@ def create_cutting_patterns_pdf(all_results, project_info):
     # Process each profile
     for profile_num, result in all_results.items():
         bins = result['bins']
+        selected_materials = result['selected_materials']
         if not bins:
             continue
 
+        # Calculate shortage for this profile
+        total_available = 0
+        shortage = 0
+        if 0 not in selected_materials:  # Not "Other" option
+            for idx in selected_materials:
+                if idx > 0 and profile_num in available_materials:
+                    materials_list = available_materials[profile_num]
+                    if idx - 1 < len(materials_list):
+                        total_available += materials_list[idx - 1]['quantity']
+
+            if len(bins) > total_available:
+                shortage = len(bins) - total_available
+
         # Profile header
         story.append(Paragraph(f"Profile {profile_num} Cutting Patterns", styles['Heading1']))
+
+        # Add shortage warning if needed
+        if shortage > 0:
+            shortage_style = styles['Normal']
+            shortage_style.textColor = colors.red
+            story.append(Paragraph(f"⚠️ WARNING: Need {shortage} additional stock pieces", shortage_style))
+
         story.append(Spacer(1, 12))
 
         # Group identical cutting patterns
@@ -941,7 +991,8 @@ if st.session_state.results:
     with col_e2:
         if st.button("Generate Excel"):
             try:
-                excel_buffer = create_excel_report(st.session_state.results, st.session_state.project_info)
+                excel_buffer = create_excel_report(st.session_state.results, st.session_state.project_info,
+                                                   st.session_state.available_materials)
                 st.download_button(
                     "Download Excel Report",
                     excel_buffer.getvalue(),
@@ -955,7 +1006,8 @@ if st.session_state.results:
     with col_e3:
         if st.button("Generate PDF Patterns"):
             try:
-                pdf_buffer = create_cutting_patterns_pdf(st.session_state.results, st.session_state.project_info)
+                pdf_buffer = create_cutting_patterns_pdf(st.session_state.results, st.session_state.project_info,
+                                                         st.session_state.available_materials)
                 st.download_button(
                     "Download PDF Patterns",
                     pdf_buffer.getvalue(),
