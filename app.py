@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import io
+import os
 from datetime import datetime
 import xlsxwriter
 from reportlab.lib.pagesizes import letter
@@ -72,20 +73,28 @@ st.markdown("""
 CUT_LOSS_90 = 3.0 / 16.0  # 3/16 inch for 90 degree cuts
 CUT_LOSS_45 = 0.5  # 1/2 inch for 45 degree cuts
 
-# Database config
-DB_CONFIG = {
-    'host': 'cb5ajfjosdpmil.cluster-czrs8kj4isg7.us-east-1.rds.amazonaws.com',
-    'database': 'dcobttk99a5sie',
-    'user': 'u7vukdvn20pe3c',
-    'password': 'p918802c410825b956ccf24c5af8d168b4d9d69e1940182bae9bd8647eb606845',
-    'port': 5432
-}
+# Database login
+# The login is a secret. It is NEVER written in this file.
+# Set DATABASE_URL in the app's secret settings:
+#   Streamlit Cloud: App settings > Secrets
+#   Railway or local: environment variable DATABASE_URL
+# Format: postgresql://USER:PASSWORD@HOST:5432/DBNAME
+def get_database_url():
+    try:
+        if "DATABASE_URL" in st.secrets:
+            return st.secrets["DATABASE_URL"]
+    except Exception:
+        pass  # No secrets file. Fall back to the environment variable.
+    return os.environ.get("DATABASE_URL")
 
 
 def connect_db():
+    url = get_database_url()
+    if not url:
+        return None
     try:
-        return psycopg2.connect(**DB_CONFIG)
-    except:
+        return psycopg2.connect(url, sslmode="require")
+    except Exception:
         return None
 
 
